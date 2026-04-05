@@ -1,8 +1,7 @@
 import pandas as pd
 import geopandas as gpd
-import osmnx as ox
 import numpy as np
-
+from pathlib import Path
 from shapely.geometry import Point
 
 # ---------------------------------------------------------
@@ -47,48 +46,48 @@ def get_distance_to_nearest_dc(lat, lon):
 
 
 # ---------------------------------------------------------
-# Feature 2: Distance to Freeway Ramp (OSM)
+# Feature 2: Distance to Freeway Ramp (OSM) — bulk approach
 # ---------------------------------------------------------
 
-def get_distance_to_nearest_motorway_link(lat, lon, search_radius_meters=3000):
-    """
-    Queries OpenStreetMap for freeway ramps (motorway_link) within a given radius
-    and returns the distance in meters to the closest one.
-    """
-    target_point = (lat, lon)
-    
-    try:
-        # Query OSM for motorway links (on-ramps/off-ramps) within the radius
-        tags = {'highway': 'motorway_link'}
-        
-        # Note: using the modern OSMnx features API
-        ramps = ox.features.features_from_point(target_point, tags=tags, dist=search_radius_meters)
-        
-        if ramps.empty:
-            return search_radius_meters # Cap distance at max radius if none found
-            
-        # Create a GeoSeries of our target point
-        point_geom = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326")
-        
-        # Project both the point and the ramps to a local UTM CRS to calculate accurate distance in meters
-        # OSMnx has a handy built-in projector
-        point_proj = ox.projection.project_gdf(gpd.GeoDataFrame(geometry=point_geom))
-        ramps_proj = ox.projection.project_gdf(ramps)
-        
-        # Calculate distance from the point to all ramps and grab the minimum
-        # .distance returns a Series of distances, .min() gets the smallest
-        min_distance = ramps_proj.distance(point_proj.geometry[0]).min()
-        
-        return min_distance
+RAMPS_CACHE = Path(__file__).resolve().parent / "ca_freeway_ramps.geojson"
 
-    except Exception as e:
-        # If no ramps are found in the radius, OSMnx might throw an EmptyOverpassResponse exception
-        # We handle this by returning the maximum search radius
-        return search_radius_meters
+
+def fetch_all_ca_ramps():
+    """One single Overpass query to get all freeway ramps in California."""
+    import requests
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    query = """
+    [out:json][timeout:120];
+    area["name"="California"]["admin_level"="4"]->.ca;
+    way[highway=motorway_link](area.ca);
+    out center;
+    """
+    print("Fetching all CA freeway ramps from Overpass (single query)...")
+    response = requests.post(overpass_url, data={"data": query})
+    response.raise_for_status()
+    elements = response.json().get("elements", [])
+
+    # Convert to GeoDataFrame using center points
+    points = []
+    for el in elements:
+        c = el.get("center")
+        if c:
+            points.append(Point(c["lon"], c["lat"]))
+    gdf = gpd.GeoDataFrame(geometry=points, crs="EPSG:4326")
+    gdf.to_file(RAMPS_CACHE, driver="GeoJSON")
+    print(f"  Cached {len(gdf)} ramp segments to {RAMPS_CACHE}")
+    return gdf
+
+
+def load_ramps():
+    if RAMPS_CACHE.exists():
+        print(f"Loading cached ramps from {RAMPS_CACHE}...")
+        return gpd.read_file(RAMPS_CACHE)
+    return fetch_all_ca_ramps()
 
 
 # ---------------------------------------------------------
-# Example Usage / Pipeline Integration
+# Pipeline
 # ---------------------------------------------------------
 
 def augment_dataframe_with_features(df, lat_col='latitude', lon_col='longitude'):
@@ -99,25 +98,45 @@ def augment_dataframe_with_features(df, lat_col='latitude', lon_col='longitude')
     df['dist_to_nearest_dc_miles'] = df.apply(
         lambda row: get_distance_to_nearest_dc(row[lat_col], row[lon_col]), axis=1
     )
-    
-    print("Calculating proximity to freeway ramps... (This may take a moment due to API calls)")
-    df['dist_to_freeway_ramp_meters'] = df.apply(
-        lambda row: get_distance_to_nearest_motorway_link(row[lat_col], row[lon_col]), axis=1
+
+    # Bulk freeway ramp distance
+    ramps = load_ramps()
+    ramps_proj = ramps.to_crs(epsg=3857)
+
+    print("Calculating proximity to freeway ramps...")
+    gdf_stores = gpd.GeoDataFrame(
+        df, geometry=gpd.points_from_xy(df[lon_col], df[lat_col]), crs="EPSG:4326"
+    ).to_crs(epsg=3857)
+
+    # Drop conflicting columns from prior joins if present
+    for col in ['index_right', 'index_left']:
+        if col in gdf_stores.columns:
+            gdf_stores = gdf_stores.drop(columns=[col])
+
+    joined = gpd.sjoin_nearest(
+        gdf_stores, ramps_proj.reset_index(drop=True), how='left', distance_col='dist_to_freeway_ramp_meters'
     )
-    
+    # sjoin_nearest can duplicate rows if equidistant; keep first match per original index
+    joined = joined[~joined.index.duplicated(keep='first')]
+    df['dist_to_freeway_ramp_meters'] = joined['dist_to_freeway_ramp_meters'].values
+
     return df
 
-# --- Test the code ---
+# --- Main ---
 if __name__ == "__main__":
-    # Example coordinates: Let's test a known In-N-Out location (Westwood, LA)
-    # and a random remote location (Middle of nowhere, Nevada)
-    test_data = {
-        'location_name': ['Westwood In-N-Out', 'Remote Desert'],
-        'latitude': [34.0628, 38.5724],
-        'longitude': [-118.4476, -117.1518]
-    }
-    
-    df = pd.DataFrame(test_data)
-    df = augment_dataframe_with_features(df)
-    print("\nResults:")
-    print(df[['location_name', 'dist_to_nearest_dc_miles', 'dist_to_freeway_ramp_meters']])
+    import sys
+
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+        df = pd.read_csv(target)
+        df = augment_dataframe_with_features(df, lat_col='lat', lon_col='lon')
+        df.to_csv(target, index=False)
+        print(f"Wrote {len(df)} rows with DC/freeway features to {target}")
+    else:
+        test_data = {
+            'lat': [34.0628, 38.5724],
+            'lon': [-118.4476, -117.1518]
+        }
+        df = pd.DataFrame(test_data)
+        df = augment_dataframe_with_features(df, lat_col='lat', lon_col='lon')
+        print(df)

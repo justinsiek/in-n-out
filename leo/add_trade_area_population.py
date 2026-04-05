@@ -17,8 +17,9 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-CSV_PATH = "leo/trade_area_in_n_out_california.csv"
+CSV_PATH = sys.argv[1] if len(sys.argv) > 1 else "leo/trade_area_in_n_out_california.csv"
 ACS_YEAR = 2022
 POPULATION_COL = "trade_area_population"
 SLEEP_SEC = 0.35  # be polite to Census APIs; ~560 calls total
@@ -79,42 +80,63 @@ def main() -> None:
     if POPULATION_COL not in fieldnames:
         fieldnames = list(fieldnames) + [POPULATION_COL]
 
-    # Cache (state, county, tract) → population to avoid duplicate ACS calls
-    pop_cache: dict[tuple[str, str, str], int | None] = {}
-
     total = len(rows)
-    for i, row in enumerate(rows, start=1):
-        # Skip if already populated
-        if row.get(POPULATION_COL) not in ("", None):
-            print(f"[{i:3}/{total}] skip (already set): {row.get('city', '')}", flush=True)
-            continue
 
+    # Step 1: Geocode all rows in parallel to get tract info
+    def geocode_row(idx_row):
+        idx, row = idx_row
+        if row.get(POPULATION_COL) not in ("", None):
+            return idx, None, None, None, True
         lat_str = row.get("lat", "").strip()
         lon_str = row.get("lon", "").strip()
         if not lat_str or not lon_str:
-            print(f"[{i:3}/{total}] skip (no lat/lon): {row.get('city', '')}", flush=True)
-            row[POPULATION_COL] = ""
+            return idx, None, None, None, False
+        return idx, *geocode_to_tract(float(lat_str), float(lon_str)), False
+
+    print("Geocoding all rows (10 threads)...", flush=True)
+    tract_results = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(geocode_row, (i, row)): i for i, row in enumerate(rows)}
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            idx, state, county, tract, skipped = future.result()
+            tract_results[idx] = (state, county, tract, skipped)
+            if done % 100 == 0:
+                print(f"  Geocoded {done}/{total}", flush=True)
+
+    print(f"  Geocoded {total} rows", flush=True)
+
+    # Step 2: Collect unique tracts and fetch populations in parallel
+    unique_tracts = set()
+    for state, county, tract, skipped in tract_results.values():
+        if state is not None:
+            unique_tracts.add((state, county, tract))
+
+    print(f"Fetching population for {len(unique_tracts)} unique tracts (10 threads)...", flush=True)
+    pop_cache: dict[tuple[str, str, str], int | None] = {}
+
+    def fetch_pop(key):
+        return key, fetch_tract_population(*key)
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(fetch_pop, key) for key in unique_tracts]
+        for future in as_completed(futures):
+            key, pop = future.result()
+            pop_cache[key] = pop
+
+    print(f"  Got population for {len(pop_cache)} tracts", flush=True)
+
+    # Step 3: Assign values
+    for i, row in enumerate(rows):
+        state, county, tract, skipped = tract_results[i]
+        if skipped:
             continue
-
-        lat, lon = float(lat_str), float(lon_str)
-        city = row.get("city", "") or f"{lat},{lon}"
-        print(f"[{i:3}/{total}] {city} ({lat}, {lon})", flush=True)
-
-        state, county, tract = geocode_to_tract(lat, lon)
-        time.sleep(SLEEP_SEC)
-
         if state is None:
             row[POPULATION_COL] = ""
             continue
-
-        key = (state, county, tract)
-        if key not in pop_cache:
-            pop_cache[key] = fetch_tract_population(state, county, tract)
-            time.sleep(SLEEP_SEC)
-
-        pop = pop_cache[key]
+        pop = pop_cache.get((state, county, tract))
         row[POPULATION_COL] = pop if pop is not None else ""
-        print(f"         tract {state}-{county}-{tract}  →  pop {pop}", flush=True)
 
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

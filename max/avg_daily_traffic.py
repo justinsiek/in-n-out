@@ -125,6 +125,12 @@ if __name__ == "__main__":
         action="store_true",
         help="download Caltrans AADT GeoJSON from the public FeatureServer into the path above",
     )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        help="path to CSV to add traffic features to (reads and overwrites in place)",
+    )
     args = parser.parse_args()
     aadt_path = args.aadt_geojson.expanduser().resolve()
     if args.fetch:
@@ -138,7 +144,13 @@ if __name__ == "__main__":
             "  python3 max/avg_daily_traffic.py /path/to/your_aadt.geojson"
         )
 
-    data = {"lat": [33.6489], "lon": [-117.7426]}  # Near Irvine Spectrum
-    test_df = pd.DataFrame(data)
-    result = add_traffic_features(test_df, aadt_path)
-    print(result)
+    if args.csv:
+        df = pd.read_csv(args.csv)
+        result = add_traffic_features(df, aadt_path)
+        result.to_csv(args.csv, index=False)
+        print(f"Wrote {len(result)} rows with traffic features to {args.csv}")
+    else:
+        data = {"lat": [33.6489], "lon": [-117.7426]}  # Near Irvine Spectrum
+        test_df = pd.DataFrame(data)
+        result = add_traffic_features(test_df, aadt_path)
+        print(result)
