@@ -1,4 +1,58 @@
 import requests
+import csv
+import math
+
+
+def haversine(lat1, lon1, lat2, lon2):
+    """Return distance in km between two coordinates."""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def add_nearest_prior_distance(input_csv="densitytest.csv", output_csv="densitytest.csv"):
+    """
+    For each In-N-Out, find the distance (km) to the closest In-N-Out
+    that was built before it. Uses start_date if available, else osm_first_seen.
+    """
+    with open(input_csv, newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    # Parse a usable date for sorting
+    for row in rows:
+        date = row.get("start_date", "").strip().split("T")[0].split(" ")[0]
+        if not date:
+            date = row.get("osm_first_seen", "").strip()
+        row["_sort_date"] = date if date else "9999-99-99"
+
+    rows.sort(key=lambda r: r["_sort_date"])
+
+    for i, row in enumerate(rows):
+        prior = rows[:i]
+        if not prior:
+            row["dist_to_nearest_prior_km"] = ""
+            continue
+
+        lat1 = float(row["lat"])
+        lon1 = float(row["lon"])
+        min_dist = min(
+            haversine(lat1, lon1, float(p["lat"]), float(p["lon"])) for p in prior
+        )
+        row["dist_to_nearest_prior_km"] = round(min_dist, 3)
+
+    # Remove helper key and write back
+    fieldnames = [k for k in rows[0].keys() if k != "_sort_date"]
+    for row in rows:
+        del row["_sort_date"]
+
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Wrote {len(rows)} rows with dist_to_nearest_prior_km to {output_csv}")
 
 
 def get_competitor_density(lat, lon, radius=3000, date=None):
@@ -48,12 +102,4 @@ def get_competitor_density(lat, lon, radius=3000, date=None):
 
 
 if __name__ == "__main__":
-    lat, lon = 34.0522, -118.2437
-
-    # Present day
-    result = get_competitor_density(lat, lon)
-    print(f"Present: {result['count']} competitors within 3km")
-
-    # Historical query
-    result_2018 = get_competitor_density(lat, lon, date="2018-01-01")
-    print(f"2018:    {result_2018['count']} competitors within 3km")
+    add_nearest_prior_distance()
