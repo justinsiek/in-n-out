@@ -1,4 +1,3 @@
-import requests
 import csv
 import math
 
@@ -55,51 +54,57 @@ def add_nearest_prior_distance(input_csv="densitytest.csv", output_csv="densityt
     print(f"Wrote {len(rows)} rows with dist_to_nearest_prior_km to {output_csv}")
 
 
-def get_competitor_density(lat, lon, radius=3000, date=None):
-    """
-    Query OSM Overpass API to count fast food competitors (excluding In-N-Out)
-    within a given radius of a coordinate.
+def load_competitors(csv_path="../shared/ca_fast_food_competitors.csv"):
+    """Load all CA fast food competitors from the shared CSV."""
+    with open(csv_path, newline="") as f:
+        comps = list(csv.DictReader(f))
+    for c in comps:
+        c["lat"] = float(c["lat"])
+        c["lon"] = float(c["lon"])
+    return comps
 
-    Args:
-        lat: Latitude of the coordinate
-        lon: Longitude of the coordinate
-        radius: Search radius in meters (default 3000m / 3km)
-        date: Optional date string (e.g. "2020-01-01") to query historical data.
-              Earliest available: 2012-09-12. If None, queries present day.
 
-    Returns:
-        dict with 'count' (number of competitors) and 'competitors' (list of names)
-    """
-    overpass_url = "https://overpass-api.de/api/interpreter"
+def add_competitor_distances(input_csv="densitytest.csv", output_csv="densitytest.csv"):
+    """Add nearest competitor distance columns, only considering competitors built before each In-N-Out."""
+    comps = load_competitors()
+    print(f"Loaded {len(comps)} competitors from shared CSV")
 
-    date_setting = f'[date:"{date}T00:00:00Z"]' if date else ""
+    with open(input_csv, newline="") as f:
+        rows = list(csv.DictReader(f))
 
-    query = f"""
-    [out:json][timeout:25]{date_setting};
-    (
-      node[amenity=fast_food][brand!~"In.N.Out"](around:{radius},{lat},{lon});
-      way[amenity=fast_food][brand!~"In.N.Out"](around:{radius},{lat},{lon});
-    );
-    out body;
-    """
+    for i, row in enumerate(rows):
+        # Get In-N-Out build date
+        date = row.get("start_date", "").strip().split("T")[0].split(" ")[0]
+        if not date or not date[0].isdigit():
+            date = row.get("osm_first_seen", "").strip()
 
-    response = requests.post(overpass_url, data={"data": query})
-    response.raise_for_status()
-    data = response.json()
+        lat = float(row["lat"])
+        lon = float(row["lon"])
 
-    elements = data.get("elements", [])
+        # Only consider competitors created before this In-N-Out
+        distances = []
+        for c in comps:
+            if date and c["created"] < date:
+                dist = haversine(lat, lon, c["lat"], c["lon"])
+                distances.append(dist)
 
-    competitors = []
-    for el in elements:
-        tags = el.get("tags", {})
-        name = tags.get("name", tags.get("brand", "Unknown"))
-        competitors.append(name)
+        distances.sort()
+        top5 = distances[:5]
 
-    return {
-        "count": len(competitors),
-        "competitors": competitors,
-    }
+        row["nearest_competitor_km"] = round(top5[0], 3) if top5 else ""
+        row["avg_nearest_5_competitors_km"] = round(sum(top5) / len(top5), 3) if top5 else ""
+
+        print(f"  [{i+1}/{len(rows)}] {row.get('city', '?')} - nearest: {row['nearest_competitor_km']}")
+
+    fieldnames = list(rows[0].keys())
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Wrote {len(rows)} rows with competitor distances to {output_csv}")
 
 
 if __name__ == "__main__":
     add_nearest_prior_distance()
+    add_competitor_distances()
