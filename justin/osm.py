@@ -73,10 +73,10 @@ def add_competitor_distances(input_csv="densitytest.csv", output_csv="densitytes
         rows = list(csv.DictReader(f))
 
     for i, row in enumerate(rows):
-        # Get In-N-Out build date
-        date = row.get("start_date", "").strip().split("T")[0].split(" ")[0]
+        # Use osm_first_seen as the date to compare against competitor created dates
+        date = row.get("osm_first_seen", "").strip()
         if not date or not date[0].isdigit():
-            date = row.get("osm_first_seen", "").strip()
+            date = row.get("start_date", "").strip().split("T")[0].split(" ")[0]
 
         lat = float(row["lat"])
         lon = float(row["lon"])
@@ -106,5 +106,7 @@ def add_competitor_distances(input_csv="densitytest.csv", output_csv="densitytes
 
 
 if __name__ == "__main__":
-    add_nearest_prior_distance()
-    add_competitor_distances()
+    import sys
+    target = sys.argv[1] if len(sys.argv) > 1 else "densitytest.csv"
+    add_nearest_prior_distance(input_csv=target, output_csv=target)
+    add_competitor_distances(input_csv=target, output_csv=target)
