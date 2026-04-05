@@ -4,7 +4,8 @@ import json
 import urllib.request
 import geopandas as gpd
 import pandas as pd
-import xgboost as xgb
+import lightgbm as lgb
+from scipy.special import expit
 from pathlib import Path
 from shapely.geometry import Point
 
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # ── Paths to cached data ────────────────────────────────────────────────────
 
-MODEL_PATH = Path(__file__).resolve().parent / "model.json"
+MODEL_PATH = Path(__file__).resolve().parent / "model_ranker.txt"
 INNOUT_CSV = ROOT / "shared" / "in_n_out_california.csv"
 COMPETITORS_CSV = ROOT / "shared" / "ca_fast_food_competitors.csv"
 RAMPS_GEOJSON = ROOT / "max" / "ca_freeway_ramps.geojson"
@@ -46,6 +47,22 @@ FEATURES = [
     "dist_to_freeway_ramp_meters",
     "trade_area_population",
 ]
+
+FEATURE_LABELS = {
+    "dist_to_nearest_prior_km":       "Distance To Nearest In-N-Out (km)",
+    "nearest_competitor_km":          "Distance To Nearest Competitor (km)",
+    "avg_nearest_5_competitors_km":   "Avg Distance To 5 Nearest Competitors (km)",
+    "median_income":                  "Median Area Income ($)",
+    "resident_pop":                   "Resident Population",
+    "workers_in_tract":               "Workers Employed In Area",
+    "workers_from_tract":             "Workers Living In Area",
+    "daytime_pop":                    "Daytime Population",
+    "hwy_aadt":                       "Annual Average Daily Traffic (Highway)",
+    "dist_to_highway_meters":         "Distance To Highway (m)",
+    "dist_to_nearest_dc_miles":       "Distance To Nearest Distribution Center (miles)",
+    "dist_to_freeway_ramp_meters":    "Distance To Freeway Ramp (m)",
+    "trade_area_population":          "Trade Area Population",
+}
 
 ACS_YEAR = 2022
 
@@ -230,8 +247,7 @@ def predict(lat, lon):
     """
     global _model
     if _model is None:
-        _model = xgb.XGBClassifier()
-        _model.load_model(str(MODEL_PATH))
+        _model = lgb.Booster(model_file=str(MODEL_PATH))
 
     print(f"Computing features for ({lat}, {lon})...")
     feats = compute_features(lat, lon)
@@ -243,7 +259,8 @@ def predict(lat, lon):
         return 0.0, feats
 
     df = pd.DataFrame([feats])[FEATURES].apply(pd.to_numeric, errors="coerce")
-    prob = _model.predict_proba(df)[:, 1][0]
+    raw_score = _model.predict(df)[0]
+    prob = float(expit(raw_score))
 
     return prob, feats
 
@@ -268,4 +285,5 @@ if __name__ == "__main__":
     print(f"{'='*50}")
     print(f"\nFeatures:")
     for k, v in feats.items():
-        print(f"  {k:35s} {v}")
+        label = FEATURE_LABELS.get(k, k)
+        print(f"  {label:50s} {v}")
