@@ -75,9 +75,7 @@ def get_tract_info(lat, lon):
     return {"state": state, "county": county, "tract": tract, "tract_fips": tract_fips}
 
 
-def main():
-    input_csv = "../shared/in_n_out_california.csv"
-    output_csv = "daytime_population.csv"
+def main(input_csv="../shared/in_n_out_california.csv", output_csv="daytime_population.csv"):
 
     # Step 1: Download LODES data (cached after first run)
     print("Loading LODES data...")
@@ -102,7 +100,7 @@ def main():
 
         geo = get_tract_info(lat, lon)
         if not geo:
-            print(f"  [{i+1}/{len(rows)}] {row['name']} - {row.get('city','')} ERROR: no tract found")
+            print(f"  [{i+1}/{len(rows)}] {row.get('name', '')} - {row.get('city','')} ERROR: no tract found")
             row["resident_pop"] = ""
             row["workers_in_tract"] = ""
             row["workers_from_tract"] = ""
@@ -131,11 +129,11 @@ def main():
         row["daytime_pop"] = daytime_pop
 
         print(
-            f"  [{i+1}/{len(rows)}] {row['name']} - {row.get('city','')} | "
+            f"  [{i+1}/{len(rows)}] {row.get('name', '')} - {row.get('city','')} | "
             f"resident: {resident_pop:,} | workers_in: {workers_in:,} | "
             f"workers_out: {workers_out:,} | daytime: {daytime_pop:,}"
             if isinstance(daytime_pop, int) else
-            f"  [{i+1}/{len(rows)}] {row['name']} - {row.get('city','')} ERROR: population lookup failed"
+            f"  [{i+1}/{len(rows)}] {row.get('name', '')} - {row.get('city','')} ERROR: population lookup failed"
         )
 
     # Step 3: Write output CSV
@@ -149,4 +147,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+        main(input_csv=target, output_csv=target)
+    else:
+        main()

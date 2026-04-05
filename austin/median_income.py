@@ -48,10 +48,7 @@ def get_median_income_b19013(lat, lon, year=2022):
         return None, str(e)
 
 
-def main():
-    input_csv = "../in_n_out_california.csv"
-    output_csv = "median_income_text.csv"
-
+def main(input_csv="../in_n_out_california.csv", output_csv="median_income_text.csv"):
     with open(input_csv, newline="") as f:
         rows = list(csv.DictReader(f))
 
@@ -64,10 +61,10 @@ def main():
         income, err = get_median_income_b19013(lat, lon)
 
         if err:
-            print(f"  [{i+1}/{len(rows)}] {row['name']} - {row.get('city', '')} ERROR: {err}")
+            print(f"  [{i+1}/{len(rows)}] {row.get('name', '')} - {row.get('city', '')} ERROR: {err}")
             row["median_income"] = ""
         else:
-            print(f"  [{i+1}/{len(rows)}] {row['name']} - {row.get('city', '')} income: ${income:,}")
+            print(f"  [{i+1}/{len(rows)}] {row.get('name', '')} - {row.get('city', '')} income: ${income:,}")
             row["median_income"] = income
 
         time.sleep(0.1)  # be polite to the Census API
@@ -82,4 +79,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+        main(input_csv=target, output_csv=target)
+    else:
+        main()
