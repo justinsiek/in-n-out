@@ -270,26 +270,8 @@ def run_lgbm_ranker(df, features):
 
 def main():
     df = load_data()
+    run_lgbm_ranker(df, FEATURES)
 
-    # ── XGBoost classifier (all features) ──────────────────────────────────
-    model_xgb, auc_xgb = run_model(df, FEATURES, label="XGBoost Classifier")
-
-    # ── LightGBM LambdaRank ─────────────────────────────────────────────────
-    model_lgbm, auc_lgbm = run_lgbm_ranker(df, FEATURES)
-
-    # ── Comparison ──────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"  COMPARISON")
-    print(f"{'='*60}")
-    print(f"  XGBoost Classifier AUC:   {auc_xgb:.4f}")
-    print(f"  LightGBM LambdaRank AUC:  {auc_lgbm:.4f}")
-    winner = "LightGBM" if auc_lgbm > auc_xgb else "XGBoost"
-    print(f"  Winner: {winner}")
-    print()
-
-    # Save XGBoost as default (probability output, easier for API)
-    model_xgb.save_model("model.json")
-    print("XGBoost model saved to model.json")
 
 
 if __name__ == "__main__":

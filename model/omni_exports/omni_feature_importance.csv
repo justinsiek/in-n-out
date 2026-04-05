@@ -1,0 +1,14 @@
+feature,feature_key,importance,importance_pct
+Distance To Nearest In-N-Out (km),dist_to_nearest_prior_km,17.0,13.6
+Distance To Nearest Competitor (km),nearest_competitor_km,15.0,12.0
+Avg Distance To 5 Nearest Competitors (km),avg_nearest_5_competitors_km,15.0,12.0
+Resident Population,resident_pop,12.0,9.6
+Distance To Freeway Ramp (m),dist_to_freeway_ramp_meters,11.0,8.8
+Annual Average Daily Traffic (Highway),hwy_aadt,9.0,7.2
+Workers Employed In Area,workers_in_tract,8.0,6.4
+Distance To Highway (m),dist_to_highway_meters,8.0,6.4
+Trade Area Population,trade_area_population,8.0,6.4
+Workers Living In Area,workers_from_tract,7.0,5.6
+Daytime Population,daytime_pop,7.0,5.6
+Median Area Income ($),median_income,6.0,4.8
+Distance To Nearest Distribution Center (miles),dist_to_nearest_dc_miles,2.0,1.6
