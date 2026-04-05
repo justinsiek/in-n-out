@@ -37,6 +37,13 @@ def load_data():
     for col in FEATURES:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Drop rows in water/special-use census tracts (0 population + 0 income)
+    # These are edge cases (ports, airports) that teach the model 0 pop is OK
+    bad_mask = (df["resident_pop"] == 0) & (df["median_income"] == 0)
+    if bad_mask.sum() > 0:
+        print(f"Dropping {bad_mask.sum()} rows with 0 population + 0 income (water/special tracts)")
+        df = df[~bad_mask].reset_index(drop=True)
+
     print(f"Dataset: {len(df)} rows ({df[TARGET].sum():.0f} positive, {(df[TARGET] == 0).sum():.0f} negative)")
     print(f"Missing values per feature:\n{df[FEATURES].isnull().sum().to_string()}\n")
 
@@ -45,18 +52,20 @@ def load_data():
 
 # ── Train & Evaluate ────────────────────────────────────────────────────────
 
-def main():
-    df = load_data()
+def run_model(df, features, label="All Features"):
+    """Train and evaluate a model with the given feature set."""
+    print(f"\n{'='*60}")
+    print(f"  {label}")
+    print(f"  Features: {len(features)}")
+    print(f"{'='*60}\n")
 
-    X = df[FEATURES]
+    X = df[features]
     y = df[TARGET]
 
-    # 85/15 stratified split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.15, random_state=42, stratify=y
     )
 
-    # Scale positive weight for class imbalance
     neg_count = (y_train == 0).sum()
     pos_count = (y_train == 1).sum()
     scale_pos_weight = neg_count / pos_count
@@ -64,7 +73,6 @@ def main():
     print(f"Train: {len(X_train)} | Test: {len(X_test)}")
     print(f"scale_pos_weight: {scale_pos_weight:.2f}\n")
 
-    # XGBoost params (without early stopping for CV compatibility)
     params = dict(
         objective="binary:logistic",
         scale_pos_weight=scale_pos_weight,
@@ -80,22 +88,18 @@ def main():
         eval_metric="auc",
     )
 
-    # ── Stratified 5-Fold CV on training set ────────────────────────────────
+    # Stratified 5-Fold CV
     cv_model = xgb.XGBClassifier(**params)
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     cv_scores = cross_val_score(cv_model, X_train, y_train, cv=cv, scoring="roc_auc")
     print(f"5-Fold CV AUC: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
     print(f"  Per fold: {[f'{s:.4f}' for s in cv_scores]}\n")
 
-    # ── Train final model with early stopping on test set ───────────────────
+    # Train final model
     model = xgb.XGBClassifier(**params, early_stopping_rounds=20)
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_test, y_test)],
-        verbose=False,
-    )
+    model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
 
-    # ── Evaluate on held-out test set ───────────────────────────────────────
+    # Evaluate
     y_prob = model.predict_proba(X_test)[:, 1]
     y_pred = model.predict(X_test)
 
@@ -106,25 +110,47 @@ def main():
     print("Confusion Matrix:")
     print(confusion_matrix(y_test, y_pred))
 
-    # ── Feature Importance ──────────────────────────────────────────────────
+    # Feature Importance
     importance = model.feature_importances_
-    feat_imp = sorted(zip(FEATURES, importance), key=lambda x: x[1], reverse=True)
+    feat_imp = sorted(zip(features, importance), key=lambda x: x[1], reverse=True)
     print("\nFeature Importance:")
     for feat, imp in feat_imp:
         bar = "█" * int(imp * 50)
         print(f"  {feat:35s} {imp:.4f} {bar}")
 
-    # ── Save model ──────────────────────────────────────────────────────────
-    model.save_model("model.json")
-    print("\nModel saved to model.json")
+    return model, auc
 
-    # ── Example: score a new location ───────────────────────────────────────
-    print("\n── Example Predictions (test set, first 5) ──")
-    sample = X_test.head()
-    scores = model.predict_proba(sample)[:, 1]
-    for i, (idx, row) in enumerate(sample.iterrows()):
+
+def main():
+    df = load_data()
+
+    # ── Run 1: All features ─────────────────────────────────────────────────
+    model_full, auc_full = run_model(df, FEATURES, label="All Features")
+
+    # ── Run 2: Without dist_to_nearest_prior_km ─────────────────────────────
+    features_no_prior = [f for f in FEATURES if f != "dist_to_nearest_prior_km"]
+    model_no_prior, auc_no_prior = run_model(df, features_no_prior, label="Without dist_to_nearest_prior_km")
+
+    # ── Comparison ──────────────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"  COMPARISON")
+    print(f"{'='*60}")
+    print(f"  All features AUC:              {auc_full:.4f}")
+    print(f"  Without nearest_prior AUC:     {auc_no_prior:.4f}")
+    print(f"  Difference:                    {auc_full - auc_no_prior:+.4f}")
+    print()
+
+    # Save the full model
+    model_full.save_model("model.json")
+    print("Full model saved to model.json")
+
+    # Example predictions
+    X_test = df[FEATURES].iloc[:5]
+    scores = model_full.predict_proba(X_test)[:, 1]
+    print("\n── Example Predictions (first 5) ──")
+    for i, (idx, row) in enumerate(X_test.iterrows()):
         city = df.loc[idx, "city"] or "?"
-        actual = y_test.loc[idx]
+        actual = df.loc[idx, TARGET]
         print(f"  {city:20s}  score: {scores[i]:.3f}  actual: {actual}")
 
 
